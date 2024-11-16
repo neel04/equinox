@@ -7,6 +7,7 @@ import jax.nn as jnn
 import jax.numpy as jnp
 import jax.random as jrandom
 import pytest
+from jax._src.dtypes import TypePromotionError
 
 
 def test_custom_init():
@@ -926,11 +927,19 @@ def test_layer_norm(getkey):
     assert jnp.allclose(ln(x1), ln(x2), atol=1e-4)
     assert jnp.allclose(ln(x1), x3, atol=1e-4)
 
+    ln = eqx.nn.LayerNorm(128, dtype=jnp.bfloat16)
+    x = jrandom.uniform(getkey(), (128,), dtype=jnp.bfloat16)
+    assert ln(x).dtype == jnp.bfloat16
+
 
 def test_group_norm(getkey):
     gn = eqx.nn.GroupNorm(groups=4, channels=128)
     x = jrandom.uniform(getkey(), (128,))
     assert gn(x).shape == (128,)
+
+    gn = eqx.nn.GroupNorm(groups=4, channels=128, dtype=jnp.bfloat16)
+    x = jrandom.uniform(getkey(), (128,), dtype=jnp.bfloat16)
+    assert gn(x).dtype == jnp.bfloat16
 
     gn = eqx.nn.GroupNorm(groups=4, channels=128)
     x = jrandom.uniform(getkey(), (128, 4, 5))
@@ -1439,9 +1448,20 @@ def test_rope_embeddings_freqs_cis():
     embedding_size = 8
     seq_length = 16
     freqs_cis = eqx.nn.RotaryPositionalEmbedding.precompute_freqs_cis(
-        embedding_size, seq_length, theta
+        embedding_size, seq_length, theta, jnp.float32
     )
-    assert jnp.allclose(freqs_cis, expected_freqs_cis, atol=1e-4)
+    assert jnp.allclose(
+        freqs_cis[0], expected_freqs_cis.real, atol=1e-4
+    ) and jnp.allclose(freqs_cis[1], expected_freqs_cis.imag, atol=1e-4)
+
+    freqs_cis = eqx.nn.RotaryPositionalEmbedding.precompute_freqs_cis(
+        embedding_size, seq_length, theta, jnp.float16
+    )
+    assert jnp.allclose(
+        freqs_cis[0].astype(jnp.float32), expected_freqs_cis.real, rtol=1e-2
+    ) and jnp.allclose(
+        freqs_cis[1].astype(jnp.float32), expected_freqs_cis.imag, rtol=1e-2
+    )
 
 
 def test_rope_embeddings_values():
@@ -1476,7 +1496,33 @@ def test_rope_embeddings_values():
         seq_length, embedding_size
     )
 
-    rope_embeddings = eqx.nn.RotaryPositionalEmbedding(embedding_size)
+    rope_embeddings = eqx.nn.RotaryPositionalEmbedding(
+        embedding_size, dtype=jnp.float32
+    )
     res = rope_embeddings(x)
 
     assert jnp.allclose(res, expected_values, atol=1e-6)
+
+    with jax.numpy_dtype_promotion("standard"):
+        # Test that high precision rope on low precision input is more
+        # accurate than low precision rope on low precision input
+        res = rope_embeddings(x.astype(jnp.float16))
+        assert jnp.allclose(
+            res.astype(jnp.float16),
+            expected_values.astype(jnp.float16),
+            rtol=1e-3,
+        )
+
+    # check that without dtype promotion we throw an error
+    with pytest.raises(TypePromotionError):
+        rope_embeddings(x.astype(jnp.float16))
+
+    rope_embeddings = eqx.nn.RotaryPositionalEmbedding(
+        embedding_size, dtype=jnp.float16
+    )
+    res = rope_embeddings(x.astype(jnp.float16))
+
+    assert (
+        jnp.allclose(res.astype(jnp.float32), expected_values, rtol=1e-2)
+        and res.dtype == jnp.float16
+    )

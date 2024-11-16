@@ -1169,3 +1169,55 @@ def test_no_jax_array_static():
         match="A JAX array is being set as static!",
     ):
         InvalidArr((), jnp.ones(10))
+
+
+# https://github.com/patrick-kidger/equinox/issues/832
+def test_cooperative_multiple_inheritance():
+    called_a = False
+    called_b = False
+    called_d = False
+
+    class A(eqx.Module):
+        def __post_init__(self) -> None:
+            nonlocal called_a
+            called_a = True
+
+    class B(A):
+        def __post_init__(self) -> None:
+            nonlocal called_b
+            called_b = True
+            super().__post_init__()
+
+    class C(A):
+        pass
+
+    class D(C, A):
+        def __post_init__(self) -> None:
+            nonlocal called_d
+            called_d = True
+            super().__post_init__()
+
+    class E(D, B):
+        pass
+
+    E()
+    assert called_a
+    assert called_b
+    assert called_d
+
+
+# https://github.com/patrick-kidger/equinox/issues/858
+def test_init_subclass_and_abstract_class_var():
+    class Parent(eqx.Module):
+        abs_cls_var: eqx.AbstractClassVar[str]
+
+        def __init__(self):
+            pass
+
+        def __init_subclass__(cls):
+            cls.abs_cls_var
+
+    class Child(Parent):
+        abs_cls_var = "foo"
+
+    Child()  # pyright: ignore[reportCallIssue]

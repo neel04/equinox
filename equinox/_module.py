@@ -176,7 +176,7 @@ manner. If you are starting a new codebase you should not have need of them.
 
 # Inherits from ABCMeta to support `eqx.{AbstractVar, AbstractClassVar}` and
 # `abc.abstractmethod`.
-class _ModuleMeta(ABCMeta):  # pyright: ignore
+class _ActualModuleMeta(ABCMeta):
     # This method is called whenever you definite a module: `class Foo(eqx.Module): ...`
     def __new__(
         mcs,
@@ -284,7 +284,7 @@ class _ModuleMeta(ABCMeta):  # pyright: ignore
 
         # Add support for `eqx.field(converter=...)` when using `__post_init__`.
         # (Scenario (c) above. Scenarios (a) and (b) are handled later.)
-        if has_dataclass_init and hasattr(cls, "__post_init__"):
+        if has_dataclass_init and "__post_init__" in cls.__dict__:
             post_init = cls.__post_init__
 
             @ft.wraps(post_init)  # pyright: ignore
@@ -293,17 +293,11 @@ class _ModuleMeta(ABCMeta):  # pyright: ignore
                 # We want to only convert once, at the top level.
                 #
                 # This check is basically testing whether or not the function we're in
-                # now (`cls.__post_init__`) is at the top level
-                # (`self.__class__.__post_init__`). If we are, do conversion. If we're
-                # not, it's presumably because someone is calling us via `super()` in
-                # the middle of their own `__post_init__`. No conversion then; their own
-                # version of this wrapper will do it at the appropriate time instead.
-                #
-                # One small foible: we write `cls.__post_init__`, rather than just
-                # `__post_init__`, to refer to this function. This allows someone else
-                # to also monkey-patch `cls.__post_init__` if they wish, and this won't
-                # remove conversion. (Conversion is a at-the-top-level thing, not a
-                # this-particular-function thing.)
+                # now (`cls`) is at the top level (`self.__class__`). If we are, do
+                # conversion. If we're not, it's presumably because someone is calling
+                # us via `super()` in the middle of their own `__post_init__`. No
+                # conversion then; their own version of this wrapper will do it at the
+                # appropriate time instead.
                 #
                 # This top-level business means that this is very nearly the same as
                 # doing conversion in `_ModuleMeta.__call__`. The differences are that
@@ -311,11 +305,11 @@ class _ModuleMeta(ABCMeta):  # pyright: ignore
                 # `__post_init__`, and (b) it allows other libraries (i.e. jaxtyping)
                 # to later monkey-patch `__init__`, and we have our converter run before
                 # their own monkey-patched-in code.
-                if self.__class__.__post_init__ is cls.__post_init__:
+                if self.__class__ is _make_initable_wrapper(cls):
                     # Convert all fields currently available.
                     _convert_fields(self, init=True)
                 post_init(self, *args, **kwargs)  # pyright: ignore
-                if self.__class__.__post_init__ is cls.__post_init__:
+                if self.__class__ is _make_initable_wrapper(cls):
                     # Convert all the fields filled in by `__post_init__` as well.
                     _convert_fields(self, init=False)
 
@@ -372,18 +366,18 @@ class _ModuleMeta(ABCMeta):  # pyright: ignore
         if post_init is None:
             init = cls.__init__
 
-            @ft.wraps(init)  # pyright: ignore
+            @ft.wraps(init)
             def __init__(self, *args, **kwargs):
                 __tracebackhide__ = True
                 init(self, *args, **kwargs)
                 # Same `if` trick as with `__post_init__`.
-                if self.__class__.__init__ is cls.__init__:
+                if self.__class__ is _make_initable_wrapper(cls):
                     _convert_fields(self, init=True)
                     _convert_fields(self, init=False)
 
             cls.__init__ = __init__
 
-        # Assign `__doc__` in case it has been manually overriden:
+        # Assign `__doc__` in case it has been manually overridden:
         # ```
         # class Foo(eqx.Module):
         #     x: int
@@ -566,10 +560,9 @@ class _ModuleMeta(ABCMeta):  # pyright: ignore
             # else it's handled in __setattr__, but that isn't called here.
         # [Step 1] Modules are immutable -- except during construction. So defreeze
         # before init.
-        post_init = getattr(cls, "__post_init__", None)
-        initable_cls = _make_initable(cls, cls.__init__, post_init, wraps=False)
+        initable_cls = _make_initable_wrapper(cls)
         # [Step 2] Instantiate the class as normal.
-        self = super(_ModuleMeta, initable_cls).__call__(*args, **kwargs)
+        self = super(_ActualModuleMeta, initable_cls).__call__(*args, **kwargs)
         assert not _is_abstract(cls)
         # [Step 3] Check that all fields are occupied.
         missing_names = {
@@ -638,6 +631,8 @@ if TYPE_CHECKING:
     class _ModuleMeta(abc.ABCMeta):
         __abstractvars__: frozenset[str]
         __abstractclassvars__: frozenset[str]
+else:
+    _ModuleMeta = _ActualModuleMeta
 
 
 def _is_special_form(cls):
@@ -703,7 +698,10 @@ _wrapper_field_names = {
 
 
 class _Initable:
-    pass
+    # Prevent `__init_subclass__` from triggering when creating initable versions of
+    # classes.
+    def __init_subclass__(cls, **kwargs):
+        del kwargs
 
 
 _transform_types = {
@@ -790,8 +788,15 @@ def __call__(self, ...):
                 break
 
 
+def _make_initable_wrapper(cls: _ActualModuleMeta) -> _ActualModuleMeta:
+    post_init = getattr(cls, "__post_init__", None)
+    return _make_initable(cls, cls.__init__, post_init, wraps=False)
+
+
 @ft.lru_cache(maxsize=128)
-def _make_initable(cls: _ModuleMeta, init, post_init, wraps: bool) -> _ModuleMeta:
+def _make_initable(
+    cls: _ActualModuleMeta, init, post_init, wraps: bool
+) -> _ActualModuleMeta:
     # Used as part of the key. Don't cache if these have changed.
     # In practice, monkey-patching these on the class -- after you've already
     # instantiated it somewhere! -- is an *ahem*, adventurous, thing to do. But never
@@ -801,9 +806,9 @@ def _make_initable(cls: _ModuleMeta, init, post_init, wraps: bool) -> _ModuleMet
     if wraps:
         field_names = _wrapper_field_names
     else:
-        field_names = {field.name for field in dataclasses.fields(cls)}  # pyright: ignore
+        field_names = {field.name for field in dataclasses.fields(cls)}
 
-    class _InitableModule(cls, _Initable):  # pyright: ignore
+    class _InitableModule(_Initable, cls):
         pass
 
     def __setattr__(self, name, value):

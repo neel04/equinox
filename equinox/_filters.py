@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import Any, Optional, Union
+from typing import Any, Optional, overload, TypeVar, Union
 
 import jax
 import jax.numpy as jnp
@@ -111,7 +111,7 @@ def filter(
         `pytree`. Each of its leaves should either be:
         - `True`, in which case the leaf or subtree is kept;
         - `False`, in which case the leaf or subtree is replaced with `replace`;
-        - a callable `Leaf -> bool`, in which case this is evaluted on the leaf or
+        - a callable `Leaf -> bool`, in which case this is evaluated on the leaf or
             mapped over the subtree, and the leaf kept or replaced as appropriate.
     - `inverse` switches the truthy/falsey behaviour: falsey results are kept and
         truthy results are replaced.
@@ -163,6 +163,15 @@ def _is_none(x):
     return x is None
 
 
+_T = TypeVar("_T", bound=PyTree)
+
+
+@overload
+def combine(*pytrees: _T, is_leaf: Optional[Callable[[Any], bool]] = None) -> _T: ...
+@overload
+def combine(
+    *pytrees: PyTree, is_leaf: Optional[Callable[[Any], bool]] = None
+) -> PyTree: ...
 def combine(
     *pytrees: PyTree, is_leaf: Optional[Callable[[Any], bool]] = None
 ) -> PyTree:

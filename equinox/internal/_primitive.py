@@ -59,7 +59,14 @@ def _is_array_like_internal(x):
 
 def _zero_from_primal(p):
     assert type(p) is not ad.UndefinedPrimal
-    return ad.Zero(jax.core.get_aval(p).at_least_vspace())
+    aval = jax.core.get_aval(p)
+    if hasattr(aval, "to_tangent_aval"):
+        # JAX >=0.4.34
+        aval = aval.to_tangent_aval()  # pyright: ignore
+    else:
+        # earlier JAX
+        aval = aval.at_least_vspace()
+    return ad.Zero(aval)
 
 
 def _combine(dynamic, static):
@@ -253,7 +260,7 @@ def filter_primitive_bind(prim: jax.core.Primitive, *args) -> PyTree:
     functions above.
     """
     assert prim.multiple_results
-    # If `args` constains a Jaxpr or ClosedJaxpr in its leaves, then it ends up as a
+    # If `args` contains a Jaxpr or ClosedJaxpr in its leaves, then it ends up as a
     # member of the `static` tuple. This is important to ensure that jaxpr-rewriting
     # passes are able to find it.
     # (E.g. if `eqx.filter_closure_convert(...)` is an argument and we apply

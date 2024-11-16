@@ -9,11 +9,11 @@ The following is a useful design pattern. It's not mandatory, but it does come r
     (a) abstract (it can be subclassed, but not instantiated); or  
     (b) final (it can be instantiated, but not subclassed).
 
-    Unless they're abstract, then methods and attributes must never be overridden. Once they've been implemented, that's it.
+    Only abstractmethods and abstract attributes can be overridden. (So once they've been implemented, then a subclass may not override them.)
 
-    The `__init__` method, and all dataclass fields, must all be defined in one class. No defining fields in multiple parts of a class hierarchy.
+    The `__init__` method, and all dataclass fields, must all be defined in one class. (No defining fields in multiple parts of a class hierarchy.)
 
-Collectively, these rules serve to avoid all the worst ways in which you might spaghetti your code. Abstract classes are used to define interfaces or partial implementations. Final classes are what get passed around at runtime. No overriding (of methods or of non-abstract classes) means there are no surprises with exactly what is being called. Keeping all fields together means that initialisation is readable.
+Collectively, these rules serve to avoid all the worst ways in which you might spaghetti your code. Abstract classes are used to define interfaces or partial implementations. Final classes are what get passed around at runtime. No overriding (either of methods or of non-abstract classes) means there are no surprises with exactly what is being called. Keeping all fields together means that initialisation is readable.
 
 Equinox will enforce these rules when subclassing with `strict=True`, e.g.
 ```python
@@ -32,8 +32,8 @@ class Bar(Foo, strict=True):
     Some quick FAQs:
 
     - If we want to subclass to override just one method, just to tweak it a little bit -- this can be done by wrapping the original class, not subclassing it.
-    - In practice we typically define all fields, and the `__init__` method, on the final class that we instantiate. Every so often we could do them on an abstract class though, in which case the final subclasses will only be implementing methods.
-    - You should never use the `hasattr` builtin. You probably meant to declare this attribute/method on an abstract base class.
+    - In practice we typically define all fields, and the `__init__` method, on the final class that we instantiate. (In principle we could do it in an abstract class if we wanted, and let its concrete subclasses still provide implementations of a few methods, it's just rare to need that.)
+    - You should never use the `hasattr` builtin. You should declare this attribute or method on an abstract base class.
     - To access an attribute on an abstract class, it can be declared using [`equinox.AbstractVar`][]; the eventual final subclass must provide this as a field or property.
 
     And for the CS nerds:
@@ -161,9 +161,9 @@ In practice, we argue that's a good idea! This rule means that when you see code
 def foo(interp: AbstractPolynomialInterpolation)
     ... = interp.degree()
 ```
-you know that it is calling precisely `AbstractPolynomialInterpolation.degree`, and not an override in some subclass. This is excellent for code readability. Thus we get the rule that no method should be overriden. (And this rule will also be checked via the `strict=True` flag.)
+you know that it is calling precisely `AbstractPolynomialInterpolation.degree`, and not an override in some subclass. This is excellent for code readability. Thus we get the rule that no method should be overridden. (And this rule will also be checked via the `strict=True` flag.)
 
-If we assume this, then we now find ourselves arriving at a conclusion: concrete means final. That is, once we have a concrete class (every abstract method/attribute defined in our ABCs is now overriden with an implementation, so we can instantiate this class), then it is now final (we're not allowed to re-override things, so subclassing is pointless). This is how we arrive at the abstract-or-final rule itself!
+If we assume this, then we now find ourselves arriving at a conclusion: concrete means final. That is, once we have a concrete class (every abstract method/attribute defined in our ABCs is now overridden with an implementation, so we can instantiate this class), then it is now final (we're not allowed to re-override things, so subclassing is pointless). This is how we arrive at the abstract-or-final rule itself!
 
 What about when you have an existing concrete class that you want to tweak just-a-little-bit? In this case, prefer composition over inheritance. Write a wrapper that forwards each method as appropriate. This is just as expressive, and means we keep these readable type-safe rules.
 
@@ -242,7 +242,7 @@ B()  # AA.__init__ is not called.
 ```
 In this case `B()` calls `A.__init__` and this then fails to call `AA.__init__`. Co-operative multiple inheritance only works if everyone, well, co-operates.
 
-Even if everyone wants to do their best, there is another issue. When writing `super().__init__`, it isn't actually know what method is being called -- as above, `super()` could be pointing at almost any class at all. This actually means that it's not possible to know what arguments to pass to `super().__init__`! "Only use keyword arguments" is the closest to a resolution that this issue has, and it's still fragile.
+Even if everyone wants to do their best, there is another issue. When writing `super().__init__`, it isn't actually known what method is being called -- as above, `super()` could be pointing at almost any class at all. This actually means that it's not possible to know what arguments to pass to `super().__init__`! "Only use keyword arguments" is the closest to a resolution that this issue has, and it's still fragile.
 
 In contrast, our no-overriding and abstract-or-final rules means that we never come across this scenario. We always know precisely what is being called.
 
