@@ -782,7 +782,6 @@ def test_multihead_attention(getkey):
         output_size=11,
         qk_size=13,
         vo_size=17,
-        fuse_qkv=False,
         key=getkey(),
     )
     q = jrandom.uniform(getkey(), (19, 3))
@@ -790,9 +789,7 @@ def test_multihead_attention(getkey):
     v = jrandom.uniform(getkey(), (23, 7))
     assert attn(q, k, v).shape == (19, 11)
 
-    attn = eqx.nn.MultiheadAttention(
-        num_heads=2, query_size=4, fuse_qkv=False, key=getkey()
-    )
+    attn = eqx.nn.MultiheadAttention(num_heads=2, query_size=4, key=getkey())
     attn = eqx.tree_at(
         lambda x: (
             x.query_proj.weight,
@@ -838,9 +835,7 @@ def test_fused_multihead_attention_error(getkey):
     with pytest.raises(AssertionError):
         assert attn(q, k, v).shape == (19, 11)
 
-    attn = eqx.nn.MultiheadAttention(
-        num_heads=2, query_size=4, fuse_qkv=False, key=getkey()
-    )
+    attn = eqx.nn.MultiheadAttention(num_heads=2, query_size=4, key=getkey())
     attn = eqx.tree_at(
         lambda x: (
             x.query_proj.weight,

@@ -1,8 +1,6 @@
-import functools as ft
 import math
 import warnings
 from collections.abc import Callable
-from functools import partial
 from typing import cast, Optional, Union
 
 import jax
@@ -54,6 +52,35 @@ def dot_product_attention(
         weights = dropout(weights, key=key, inference=inference)
     attn = jnp.einsum("sS,Sd->sd", weights, value)
     return attn
+
+
+def optimized_dot_product_attention(
+    query: Float[Array, "q_seq n_heads qk_size"],
+    key_: Float[Array, "kv_seq n_heads qk_size"],
+    value: Float[Array, "kv_seq n_heads v_size"],
+    mask: Optional[Bool[Array, "q_seq n_heads kv_seq"]] = None,
+    dropout: Optional[Dropout] = None,
+    *,
+    key: Optional[PRNGKeyArray] = None,
+    inference: Optional[bool] = None,
+) -> Float[Array, "batch q_seq n_heads qk_size"]:
+    assert (
+        key_.shape == value.shape
+    ), "Optimized DPA constraint. Value and Key shapes have to equal."
+
+    # TODO: assert dropout == 0, 'JAX doesnt support dropout for DPA yet.'
+
+    query, key_, value = (
+        jnp.expand_dims(query, 0),
+        jnp.expand_dims(key_, 0),
+        jnp.expand_dims(value, 0),
+    )
+
+    weights = jax.nn.dot_product_attention(
+        query, key_, value, mask=mask, implementation="xla"
+    )
+
+    return weights
 
 
 class MultiheadAttention(Module, strict=True):
@@ -153,7 +180,7 @@ class MultiheadAttention(Module, strict=True):
         use_output_bias: bool = False,
         dropout_p: float = 0.0,
         inference: bool = False,
-        fuse_qkv: bool = True,
+        fuse_qkv: bool = False,
         dtype=None,
         *,
         key: PRNGKeyArray,
@@ -312,7 +339,6 @@ class MultiheadAttention(Module, strict=True):
         """
 
         if deterministic is not None:
-            inference = deterministic
             warnings.warn(
                 "MultiheadAttention()(deterministic=...) is deprecated "
                 "in favour of MultiheadAttention()(inference=...)"
@@ -363,20 +389,15 @@ class MultiheadAttention(Module, strict=True):
                     "process_heads must not change the shape of the heads."
                 )
 
-        attn_fn = partial(
-            dot_product_attention, dropout=self.dropout, inference=inference
-        )
-        keys = None if key is None else jax.random.split(key, query_heads.shape[1])
         if mask is not None and mask.ndim == 3:
-            # Batch `mask` and `keys` down their 0-th dimension.
-            attn = jax.vmap(attn_fn, in_axes=1, out_axes=1)(
-                query_heads, key_heads, value_heads, mask=mask, key=keys
+            attn = optimized_dot_product_attention(
+                query_heads, key_heads, value_heads, mask=mask, key=key
             )
         else:
-            # Batch `keys` down its 0-th dimension.
-            attn = jax.vmap(ft.partial(attn_fn, mask=mask), in_axes=1, out_axes=1)(
-                query_heads, key_heads, value_heads, key=keys
+            attn = optimized_dot_product_attention(
+                query_heads, key_heads, value_heads, mask=mask, key=key
             )
+
         attn = attn.reshape(query_seq_length, -1)
 
         return jax.vmap(self.output_proj)(attn)
